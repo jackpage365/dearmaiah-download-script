@@ -6,7 +6,7 @@ const axios = require("axios");
 const BASE_URL = "https://dearmaiah.com";
 const API_URL = `${BASE_URL}/products.json?page=`;
 const OUTPUT_DIR = path.join(__dirname, "images");
-const DELAY_MS = 5000; // หน่วง 5 วิ
+const DELAY_MS = 5000; // หน่วง 5 วิเฉพาะตอนดาวน์โหลดใหม่
 
 // สร้างโฟลเดอร์ images ถ้ายังไม่มี
 if (!fs.existsSync(OUTPUT_DIR)) {
@@ -24,17 +24,21 @@ function sanitizeFileName(name) {
 // ดาวน์โหลดรูปภาพ
 async function downloadImage(url, filename) {
   const filepath = path.join(OUTPUT_DIR, filename);
+
+  // ถ้ามีไฟล์แล้ว skip เลย ไม่หน่วง
   if (fs.existsSync(filepath)) {
     console.log(`⏩ Skipped: ${filename}`);
-    return;
+    return false; // ไม่ต้องหน่วง
   }
 
   try {
     const res = await axios.get(url, { responseType: "arraybuffer" });
     fs.writeFileSync(filepath, res.data);
     console.log(`✅ Saved: ${filename}`);
+    return true; // ดาวน์โหลดใหม่ ต้องหน่วง
   } catch (err) {
     console.error(`❌ Failed: ${url} (${err.message})`);
+    return false;
   }
 }
 
@@ -76,6 +80,15 @@ async function main() {
     const items = await fetchPage(page);
 
     for (const item of items) {
+      // ตรวจสอบว่ามีไฟล์ของสินค้านี้อยู่แล้ว
+      const productFilesExist = fs.readdirSync(OUTPUT_DIR).some(file =>
+        file.startsWith(`${item.id}-`)
+      );
+      if (productFilesExist) {
+        console.log(`⏩ Skipped item ${item.id} (${item.name})`);
+        continue; // ไม่ต้อง fetch
+      }
+
       const product = await fetchItem(item.id);
       if (!product) continue;
 
@@ -90,9 +103,14 @@ async function main() {
           ? photo.normal
           : BASE_URL + photo.normal;
 
-        const filename = `${product.id}-${product.name}-${i+1}.jpg`;
-        await downloadImage(imgUrl, filename);
-        await new Promise((r) => setTimeout(r, DELAY_MS));
+        const filename = `${product.id}-${sanitizeFileName(product.name)}-${i+1}.jpg`;
+
+        const downloaded = await downloadImage(imgUrl, filename);
+
+        // หน่วงเฉพาะตอนดาวน์โหลดใหม่
+        if (downloaded) {
+          await new Promise((r) => setTimeout(r, DELAY_MS));
+        }
       }
     }
   }
