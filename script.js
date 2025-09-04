@@ -6,83 +6,98 @@ const axios = require("axios");
 const BASE_URL = "https://dearmaiah.com";
 const API_URL = `${BASE_URL}/products.json?page=`;
 const OUTPUT_DIR = path.join(__dirname, "images");
+const DELAY_MS = 5000; // หน่วง 5 วิ
 
 // สร้างโฟลเดอร์ images ถ้ายังไม่มี
 if (!fs.existsSync(OUTPUT_DIR)) {
-  fs.mkdirSync(OUTPUT_DIR);
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 }
 
 // sanitize ชื่อไฟล์ให้ใช้ได้จริง
 function sanitizeFileName(name) {
   return name
-    .replace(/[^a-zA-Z0-9-_]/g, "-") // เอาเฉพาะตัวอักษร/ตัวเลข/ขีดกลาง/ขีดล่าง
-    .replace(/-+/g, "-") // ลดขีดซ้ำ ๆ ให้เหลือขีดเดียว
-    .substring(0, 50); // จำกัดความยาว กันยาวเกิน
+    .replace(/[^a-zA-Z0-9-_]/g, "-")
+    .replace(/-+/g, "-")
+    .substring(0, 50);
 }
 
+// ดาวน์โหลดรูปภาพ
 async function downloadImage(url, filename) {
+  const filepath = path.join(OUTPUT_DIR, filename);
+  if (fs.existsSync(filepath)) {
+    console.log(`⏩ Skipped: ${filename}`);
+    return;
+  }
+
   try {
     const res = await axios.get(url, { responseType: "arraybuffer" });
-    fs.writeFileSync(filename, res.data);
-    console.log("✅ Saved:", filename);
+    fs.writeFileSync(filepath, res.data);
+    console.log(`✅ Saved: ${filename}`);
   } catch (err) {
-    console.error("❌ Failed:", url, err.message);
+    console.error(`❌ Failed: ${url} (${err.message})`);
   }
 }
 
+// โหลดรายการสินค้าแต่ละหน้า
 async function fetchPage(page) {
   try {
-    const res = await axios.get(API_URL + page);
-    const data = res.data;
-
-    if (!data.items || data.items.length === 0) {
-      console.log("📌 No more items. Done!");
-      return false;
+    const res = await axios.get(`${API_URL}${page}`);
+    const items = res.data.items || [];
+    if (items.length === 0) {
+      console.log("📌 No items found on page", page);
+      return [];
     }
+    return items;
+  } catch (err) {
+    console.error(`❌ Error loading page ${page}:`, err.message);
+    return [];
+  }
+}
 
-    for (const item of data.items) {
-      if (item.photo && item.photo.normal) {
-        let imgUrl = item.photo.normal;
+// โหลดรายละเอียดสินค้าแต่ละตัว
+async function fetchItem(id) {
+  try {
+    const res = await axios.get(`${BASE_URL}/products/${id}.json`);
+    return res.data;
+  } catch (err) {
+    console.error(`❌ Error loading item ${id}:`, err.message);
+    return null;
+  }
+}
 
-        // ❌ ข้ามรูป default ที่ไม่มีจริง
-        if (imgUrl.includes("no_image_available.jpg")) {
-          console.log("⏭️ Skip default image for", item.id);
-          continue;
-        }
+// main
+async function main() {
+  const args = process.argv.slice(2);
+  const startPage = parseInt(args[0] || "1", 10);
+  const endPage = parseInt(args[1] || startPage, 10);
 
-        // ถ้าเป็น relative path → เติม BASE_URL
-        if (imgUrl.startsWith("/")) {
-          imgUrl = BASE_URL + imgUrl;
-        }
+  for (let page = startPage; page <= endPage; page++) {
+    console.log(`\n📄 Loading page ${page}...`);
+    const items = await fetchPage(page);
 
-        const safeName = sanitizeFileName(item.name || "noname");
-        const filename = path.join(OUTPUT_DIR, `${item.id}-${safeName}.jpg`);
+    for (const item of items) {
+      const product = await fetchItem(item.id);
+      if (!product) continue;
+
+      // โหลดรูปย่อยจาก photos
+      const photos = product.photos || [];
+      for (let i = 0; i < photos.length; i++) {
+        const photo = photos[i];
+        if (!photo || !photo.normal) continue;
+        if (photo.normal.includes("no_image_available")) continue;
+
+        const imgUrl = photo.normal.startsWith("http")
+          ? photo.normal
+          : BASE_URL + photo.normal;
+
+        const filename = `${product.id}-${product.name}-${i+1}.jpg`;
         await downloadImage(imgUrl, filename);
+        await new Promise((r) => setTimeout(r, DELAY_MS));
       }
     }
-
-    return true;
-  } catch (err) {
-    console.error("Error fetching page", page, err.message);
-    return false;
   }
+
+  console.log("\n🎉 All done!");
 }
 
-async function run() {
-  // ใช้ args กำหนดหน้าแรก-หน้าสุดท้าย
-  // ตัวอย่าง: node script.js 2 5  (โหลด page 2 ถึง 5)
-  const startPage = parseInt(process.argv[2] || "1", 10);
-  const endPage = parseInt(process.argv[3] || startPage, 10);
-
-  let page = startPage;
-
-  while (page <= endPage) {
-    console.log(`\n📥 Fetching page ${page}...`);
-    const hasData = await fetchPage(page);
-    if (!hasData) break;
-    page++;
-    await new Promise((r) => setTimeout(r, 1000)); // wait 1s
-  }
-}
-
-run();
+main();
